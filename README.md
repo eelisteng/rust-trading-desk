@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="README_EN.md">🇺🇸 English</a> &nbsp;|&nbsp; <a href="README.md">🇨🇳 中文</a>
+</p>
+
 # tdesk · Rust 股票交易终端（模拟盘）
 
 > ⚠️ **本项目是本地纸面交易 / 教学演示系统。行情由确定性算法合成，不连接任何券商或交易所，不产生真实资金流动，不构成投资建议。**

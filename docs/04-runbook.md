@@ -142,7 +142,8 @@ impl Broker for MyBroker {
 
 ```
 Cargo.toml                          workspace 定义
-README.md                           项目入口
+README.md                           项目入口（中文，含中/英切换横幅）
+README_EN.md                        英文入口（含中/英切换横幅）
 docs/01..04                         需求 / 架构 / 测试 / 运行
 crates/tdesk-core/src/
   types.rs        Price/Money/Order/Trade/Candle/Tick/Quote
