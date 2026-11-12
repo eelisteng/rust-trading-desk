@@ -1,0 +1,10 @@
+[package]
+name = "tdesk-data"
+description = "Market data ports and deterministic synthetic/CSV adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tdesk-core.workspace = true

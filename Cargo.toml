@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tdesk-core",
+    "crates/tdesk-data",
+    "crates/tdesk-cli",
+    "crates/tdesk-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["WorkBuddy"]
+repository = "https://example.local/tdesk"
+
+[workspace.dependencies]
+tdesk-core = { path = "crates/tdesk-core" }
+tdesk-data = { path = "crates/tdesk-data" }
+egui = "0.31.1"
+eframe = "0.31.1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4
+strip = true
