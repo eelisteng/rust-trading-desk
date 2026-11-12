@@ -60,7 +60,7 @@ cargo run -p tdesk-app
 cargo run -p tdesk-cli
 ```
 
-输出 6 个段落：多市场规则表、确定性行情、A 股 T+1 全链路（含风控拒绝、撤单、平仓）、回测指标、CSV 适配器、1000 tick 性能基准。脚本内含 `assert!`，任何环节破坏账户恒等式都会 panic 退出。
+输出 8 个段落：多市场规则表、确定性行情、A 股 T+1 全链路（含风控拒绝、撤单、平仓）、回测指标、CSV 适配器、1000 tick 性能基准、**第 7 节程序化自动交易（纸面实盘回路：策略驱动 `PaperBroker` 自动买卖 3000 tick）**、**第 8 节三类量化策略回测对比**。脚本内含 `assert!`，任何环节破坏账户恒等式都会 panic 退出。
 
 ## 5. 扩展指南
 
@@ -84,17 +84,47 @@ CSV 格式：`ts,open,high,low,close,volume`，价格为十进制字符串，支
 
 ### 增加策略
 
+同一套策略可同时跑回测与实盘自动交易：实现 `Strategy`（日频 `on_bar` 回测）与 `LiveStrategy`（tick 级 `on_quote` 实盘）两个 trait，共用内部状态即可。引擎在 `strategies.rs` 已提供双均线、突破、均值回归三套范例。
+
 ```rust
+// 回测：日频，只能访问 ctx.history[..=ctx.index]，天然无未来函数
 struct MyStrategy;
 impl Strategy for MyStrategy {
     fn name(&self) -> &str { "my-strategy" }
-    fn on_bar(&mut self, ctx: &BarContext<'_>) -> Option<Signal> {
-        // 只能访问 ctx.history[..=ctx.index]，天然无未来函数
-        None
-    }
+    fn on_bar(&mut self, ctx: &BarContext<'_>) -> Option<Signal> { None }
 }
+
+// 实盘自动交易：tick 级，返回 Signal 后由 LiveTrader 经 Broker 下单
+impl LiveStrategy for MyStrategy {
+    fn name(&self) -> &str { "my-strategy" }
+    fn on_quote(&mut self, ctx: &LiveContext<'_>) -> Option<Signal> { None }
+}
+
 let result = run_backtest(&bars, &symbol, rules_for(Market::AShare), &mut MyStrategy);
+// 实盘纸面回路：LiveTrader 驱动 Broker（PaperBroker 或 LiveBroker）
+let mut trader = LiveTrader::new(PaperBroker::new(engine), rules, Box::new(MyStrategy), 0.3);
+for tick in stream { let actions = trader.on_quote(sym, &tick); /* 审核 actions */ }
 ```
+
+### 接入真实券商（实盘 Broker）
+
+`Broker` trait 已把下单/撤单/持仓/资金抽象出来；当前内置 `PaperBroker`（本地撮合，纸面实盘）与 `LiveBroker`（**未配置的桩**，返回 `BrokerError::NotConfigured`）。要接入真实通道（如 QMT / Ptrade / 掘金 / 客户端自动化），只需实现 `Broker`：
+
+```rust
+struct MyBroker { /* 凭据、会话、通道客户端 */ }
+impl Broker for MyBroker {
+    fn name(&self) -> &str { "my-broker" }
+    fn submit(&mut self, req: OrderRequest) -> Result<BrokerOrderId, BrokerError> { /* 调券商 API */ todo!() }
+    fn cancel(&mut self, id: &BrokerOrderId) -> Result<(), BrokerError> { todo!() }
+    fn last_price(&self, s: &Symbol) -> Option<Price> { todo!() }
+    fn cash(&self) -> Money { todo!() }
+    fn position(&self, s: &Symbol) -> Option<BrokerPosition> { todo!() }
+    fn positions(&self) -> Vec<BrokerPosition> { todo!() }
+    fn pending_orders(&self) -> Vec<BrokerOrderView> { todo!() }
+}
+```
+
+> 真实交易涉及资金与合规风险，**务必**把凭据隔离在环境变量/密钥库、增加下单前人工复核与审计日志，并在测试网/模拟盘充分验证后再接生产。东方财富证券目前无面向个人的官方程序化交易 API，本仓库不内置任何未授权通道，请以合规券商通道为准。
 
 ## 6. 故障排查
 
@@ -121,7 +151,10 @@ crates/tdesk-core/src/
   risk.rs         前置只读风控
   engine.rs       订单簿 / 价格时间优先撮合 / 做市商流动性
   backtest.rs     Strategy / SMA 金叉 / 指标
-  error.rs        RiskError / EngineError（含中文原因）
+  broker.rs       Broker trait / PaperBroker（纸面）/ LiveBroker（桩）
+  live.rs         LiveTrader / LiveStrategy / LiveContext / 仓位 sizing
+  strategies.rs   双均线 / 突破 / 均值回归（同时实现 Strategy+LiveStrategy）
+  error.rs        RiskError / EngineError / BrokerError（含中文原因）
 crates/tdesk-core/tests/integration.rs
 crates/tdesk-data/src/
   rng.rs          SplitMix64 + Box-Muller（确定性）

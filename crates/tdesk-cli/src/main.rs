@@ -4,8 +4,9 @@
 use std::time::Instant;
 
 use tdesk_core::{
-    run_backtest, rules_for, Market, MatchingEngine, OrderRequest, OrderType, Side, SmaCrossStrategy,
-    Symbol,
+    run_backtest, rules_for, BreakoutStrategy, Broker, DualMaStrategy, LiveAction, LiveTrader,
+    Market, MatchingEngine, MeanReversionStrategy, OrderRequest, OrderType, PaperBroker, Side,
+    SmaCrossStrategy, Symbol,
 };
 use tdesk_data::{CsvSource, MarketDataSource, SyntheticSource};
 
@@ -26,9 +27,12 @@ fn main() {
     demo_backtest();
     demo_csv();
     benchmark();
+    demo_live_paper();
+    demo_strategy_compare();
     section("结论");
-    println!("全部断言通过：撮合、风控、T+1 结算、账户守恒、回测与数据适配器均正常。");
+    println!("全部断言通过：撮合、风控、T+1 结算、账户守恒、回测、可插拔 Broker 与程序化策略均正常。");
     println!("提示：本系统为模拟盘，行情为确定性合成数据，不构成任何投资建议。");
+    println!("实盘券商适配器（Broker trait 的 LiveBroker 实现）尚未接入，请按需接入 QMT / Ptrade / 东财客户端自动化 等通道。");
 }
 
 fn demo_market_rules() {
@@ -233,6 +237,88 @@ ts,open,high,low,close,volume
         rules_for(Market::AShare).format_price(tick.prev_close),
         tick.volume
     );
+}
+
+fn demo_live_paper() {
+    section("7 · 程序化自动交易（纸面实盘回路）");
+    let rules = rules_for(Market::Us); // T+0，便于在同一段行情内演示买入/卖出闭环
+    let mut source = SyntheticSource::new(Market::Us, SEED);
+    let symbol = "AAPL";
+    let mut trader = LiveTrader::new(
+        rules.clone(),
+        PaperBroker::new(rules.clone(), CASH),
+        Box::new(DualMaStrategy::new(5, 20)),
+        0.30,
+    );
+    let mut submitted = 0u32;
+    let mut rejected = 0u32;
+    for i in 0..3000 {
+        let tick = source.next_tick(symbol);
+        for action in trader.on_quote(symbol, &tick) {
+            match action {
+                LiveAction::OrderSubmitted(_) => submitted += 1,
+                LiveAction::OrderRejected(_) => rejected += 1,
+                _ => {}
+            }
+        }
+        if (i + 1) % 24 == 0 {
+            trader.roll_day();
+        }
+    }
+    let pos = trader.broker.position(symbol);
+    let account = &trader.broker.engine().account;
+    println!(
+        "策略 {} | 标的 {} | 提交订单 {} 笔 | 拒绝 {} 笔",
+        trader.strategy.name(),
+        symbol,
+        submitted,
+        rejected
+    );
+    println!(
+        "收盘持仓 {} 股 | 可用 {} | 现金 {} | 总权益 {}",
+        pos.qty,
+        pos.available,
+        rules.format_money(account.cash),
+        rules.format_money(account.equity(rules.as_ref()))
+    );
+    println!(
+        "已实现盈亏 {} | 累计手续费 {}",
+        rules.format_signed_money(account.realized_pnl()),
+        rules.format_money(account.total_fees)
+    );
+    assert!(account.cash >= 0, "现金不应为负");
+    assert!(account.equity(rules.as_ref()) > 0, "总权益应为正");
+    assert!(submitted > 0, "策略应在 3000 tick 内至少下单一次");
+}
+
+fn demo_strategy_compare() {
+    section("8 · 三类量化策略回测对比（同一段历史）");
+    let rules = rules_for(Market::AShare);
+    let source = SyntheticSource::new(Market::AShare, SEED);
+    let symbol = Symbol::new("600519.SH");
+    let bars = source.history(symbol.as_str(), 180);
+
+    let mut dual = DualMaStrategy::new(5, 20);
+    let r = run_backtest(&bars, &symbol, rules.clone(), &mut dual);
+    println!(
+        "双均线    | 成交 {} 笔 | 收益 {:7.2}% | 回撤 {:6.2}% | 胜率 {:5.1}%",
+        r.metrics.trade_count, r.metrics.total_return_pct, r.metrics.max_drawdown_pct, r.metrics.win_rate_pct
+    );
+
+    let mut breakout = BreakoutStrategy::new(20);
+    let r = run_backtest(&bars, &symbol, rules.clone(), &mut breakout);
+    println!(
+        "N日突破  | 成交 {} 笔 | 收益 {:7.2}% | 回撤 {:6.2}% | 胜率 {:5.1}%",
+        r.metrics.trade_count, r.metrics.total_return_pct, r.metrics.max_drawdown_pct, r.metrics.win_rate_pct
+    );
+
+    let mut revert = MeanReversionStrategy::new(20, 2.0);
+    let r = run_backtest(&bars, &symbol, rules.clone(), &mut revert);
+    println!(
+        "均值回归  | 成交 {} 笔 | 收益 {:7.2}% | 回撤 {:6.2}% | 胜率 {:5.1}%",
+        r.metrics.trade_count, r.metrics.total_return_pct, r.metrics.max_drawdown_pct, r.metrics.win_rate_pct
+    );
+    println!("注：合成数据为几何布朗运动，回测结果仅用于验证策略闭环，不可外推。");
 }
 
 fn benchmark() {

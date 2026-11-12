@@ -30,7 +30,7 @@
 
 | Crate | 职责 | 关键公开类型 | 外部依赖 |
 | --- | --- | --- | --- |
-| `tdesk-core` | 领域模型、撮合、结算、风控、回测 | `MatchingEngine`, `Account`, `MarketRules`, `Strategy`, `run_backtest` | 无 |
+| `tdesk-core` | 领域模型、撮合、结算、风控、回测、**可插拔 Broker、实时交易回路、量化策略** | `MatchingEngine`, `Account`, `MarketRules`, `Strategy`, `run_backtest`, `Broker`, `PaperBroker`, `LiveTrader`, `LiveStrategy`, `DualMaStrategy`, `BreakoutStrategy`, `MeanReversionStrategy` | 无 |
 | `tdesk-data` | 行情端口与实现 | `MarketDataSource`, `SyntheticSource`, `CsvSource`, `Instrument` | `tdesk-core` |
 | `tdesk-app` | 桌面 GUI | `TradingApp::render`, `CandleChart` | `egui`, `eframe`, 上述二者 |
 | `tdesk-cli` | 无头端到端演示与基准 | `main` | `tdesk-core`, `tdesk-data` |
@@ -101,6 +101,30 @@ impl eframe::App for TradingApp {
 
 信号在第 `i` 根 K 线**收盘后**产生，成交在第 `i+1` 根 **开盘价**，费用/T+N 结算复用 `Account` 与 `FeeSchedule`。每根 K 线视为一个交易日，逐日 `roll_day()`。
 
+### ADR-7：可插拔 `Broker` 端口 + 统一策略框架（纸面/实盘同构）
+
+```
+            行情 tick (MarketDataSource / 真实行情适配器)
+                          │  Tick { last, bid, ask, prev_close }
+                          ▼
+                   LiveTrader::on_quote(symbol, &tick)
+                          │  ① broker.set_price(...)  ② strategy.on_quote(ctx) → Option<Signal>
+                          ▼
+             规模 sizing：size_buy / size_sell（现金·lot·participation 单一出处）
+                          │
+                          ▼
+                  broker.submit(OrderRequest)  ──►  Broker trait
+                          │                     PaperBroker ── 内置撮合引擎（模拟盘）
+                          │                     LiveBroker  ── 实盘适配器骨架（未配置）
+                          ▼
+                  成交回报 → 账户结算 → 持仓/盈亏
+```
+
+- **`Broker` trait** 是下单/撤单/查持仓/查资金的唯一出口，与撮合引擎解耦。`PaperBroker` 直接包裹现有 `MatchingEngine`，因此"原有模拟交易"原样保留并升格为可切换后端；`set_price` 时刷新做市商盘口，使市价单可立即成交。
+- **`LiveBroker` 是刻意的空壳**：东方财富证券等**没有面向散户的官方交易 API**，真实下单需走量化平台网关（QMT / Ptrade / 掘金）或客户端自动化（easytrader 风格），均存在合规/封号/实盘资金风险。故实盘适配器**默认不实现**，任何 `submit` 都显式返回 `BrokerError::NotConfigured`，须经明确评估与凭据隔离后再落地。
+- **策略同构**：每个策略同时实现 `Strategy`（回测）与 `LiveStrategy`（实时），复用同一段内部价格缓冲与 `sma`/`mean_std` 计算，保证"回测里调好的参数，实盘纸面行为一致"。首版内置三类：`DualMaStrategy`（双均线金叉死叉）、`BreakoutStrategy`（N 日高低点突破·动量）、`MeanReversionStrategy`（均值回归·布林）。
+- **纸面优先**：`LiveTrader` 对纸面与实盘完全一致，仅 `Broker` 实现不同；策略与风控逻辑在仿真环境跑通后再接真实通道，避免真金白银试错。
+
 ## 4. 核心流程
 
 ### 4.1 下单时序
@@ -140,6 +164,22 @@ TradingApp::advance_market
 
 `engine.roll_day()` → `prev_close = last`；`account.roll_day()` → `available += locked_today; locked_today = 0`；`day_index += 1`。涨跌停区间随之按新前收盘重算。
 
+### 4.4 实时自动交易回路（纸面/实盘同构）
+
+```
+每收到一个行情 tick：
+  LiveTrader::on_quote(symbol, &Tick)
+    1. broker.set_price(symbol, tick.last)         // 纸面：刷新盘口，使市价单可成交
+    2. ctx = LiveContext{ price, prev_close, position, available, cash, rules }
+    3. signal = strategy.on_quote(&ctx)            // 双均线/突破/均值回归 → Option<Signal>
+    4. qty = size_buy(cash, price_minor, participation, lot)  // 或 size_sell(available)
+    5. broker.submit(OrderRequest{ kind: Market, … })  → LiveAction::{OrderSubmitted|Rejected|Insufficient|NoSignal}
+    6. 可选 trader.roll_day() 推进交易日（触发 T+1 释放）
+```
+
+- 回路与撮合引擎、风控完全解耦；接入真实券商只需新增一个 `impl Broker`（见 ADR-7）。
+- 规模计算在 `live::size_buy/size_sell` 单点收口，所有策略与回测共用，避免现金/手数/仓位比例分散在多处。
+
 ## 5. 状态机
 
 ```
@@ -166,6 +206,12 @@ TradingApp::advance_market
 | 结算 | `Account::equity(&BTreeMap<String, Price>, &dyn MarketRules) -> Money` | 现金 + 市值 |
 | 风控 | `risk::validate(&MatchingEngine, &OrderRequest) -> Result<(), RiskError>` | 只读校验 |
 | 回测 | `run_backtest(&[Candle], &Symbol, Arc<dyn MarketRules>, &mut dyn Strategy) -> BacktestResult` | 权益曲线 + 指标 |
+| 经纪商 | `Broker::submit(OrderRequest) -> Result<BrokerOrderId, BrokerError>` | 下单出口（纸面/实盘同构） |
+| 经纪商 | `PaperBroker::new(Arc<dyn MarketRules>, Money)` | 包裹 `MatchingEngine` 的模拟后台 |
+| 实盘回路 | `LiveTrader::on_quote(&mut self, &str, &Tick) -> Vec<LiveAction>` | 行情→策略→下单→回报 |
+| 策略 | `Strategy::on_bar(&mut self, &BarContext) -> Option<Signal>` | 回测信号 |
+| 策略 | `LiveStrategy::on_quote(&mut self, &LiveContext) -> Option<Signal>` | 实时信号（与回测同构） |
+| 策略 | `DualMaStrategy` / `BreakoutStrategy` / `MeanReversionStrategy` | 三类内置量化策略，均实现双 trait |
 
 ## 7. 线程与并发
 
@@ -197,4 +243,4 @@ rust-trading-desk/
 | v0.2 | `CsvSource` 接真实历史数据；订单/账户 JSON 快照持久化；K 线周期切换 |
 | v0.3 | `HttpQuoteSource` 适配器 + `tokio` 后台行情线程（`mpsc` 注入） |
 | v0.4 | 策略插件化、参数网格寻优、多标的组合回测 |
-| v0.5 | 券商 API 适配器（需合规评估、凭据隔离、审计日志）——**与模拟盘物理隔离** |
+| v0.5 | 券商 API 适配器：已预留 `Broker` 端口与 `LiveBroker` 空壳；落地 `LiveBroker` 真实实现需经合规评估、凭据隔离、审计日志，并与模拟盘物理隔离（详见 ADR-7） |
