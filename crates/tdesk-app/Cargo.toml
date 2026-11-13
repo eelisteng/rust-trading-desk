@@ -15,8 +15,8 @@ name = "tdesk_app"
 path = "src/lib.rs"
 
 [features]
-# Internal verification aid: EFRAME_SCREENSHOT_TO=<file.png> captures one
-# frame and exits. Useful for CI / visual regression checks.
+# Legacy eframe CI hook (EFRAME_SCREENSHOT_TO). On macOS the GL readback can
+# be unreliable; use TDESK_CAPTURE / TDESK_CAPTURE_TO for documentation shots.
 screenshot = ["eframe/__screenshot"]
 
 [dependencies]
@@ -24,3 +24,4 @@ tdesk-core.workspace = true
 tdesk-data.workspace = true
 egui.workspace = true
 eframe.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }

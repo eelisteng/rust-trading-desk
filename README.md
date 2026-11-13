@@ -6,6 +6,8 @@
 
 > ⚠️ **本项目是本地纸面交易 / 教学演示系统。行情由确定性算法合成，不连接任何券商或交易所，不产生真实资金流动，不构成投资建议。**
 
+![tdesk 主界面：K 线与成交量、自选列表、下单面板、账户概览](docs/screenshots/01-main.png)
+
 一个用 **Rust + egui/eframe** 写的桌面股票交易终端：行情 K 线、下单撤单、撮合结算、风控、持仓盈亏与策略回测的完整闭环，全部离线可运行。
 
 ## 快速开始
@@ -32,6 +34,20 @@ macOS 首次启动会自动加载系统 `Arial Unicode.ttf` 以显示中文，�
 | 程序化策略 | `Strategy`/`LiveStrategy` 双 trait 同构：**双均线金叉死叉**、**N 日突破（动量）**、**均值回归（布林）**；同一套代码既回测又驱动实时纸面下单 |
 | 自动交易回路 | `Broker` 端口 + `LiveTrader`：行情→策略→规模→下单→结算，纸面（`PaperBroker`）与实盘（`LiveBroker` 骨架）同构；CLI 演示 3000 tick 自动买卖闭环 |
 | 工程 | Cargo workspace 分层、`cargo clippy` 无告警、UI 可在无窗口环境渲染并测试 |
+
+## 界面预览
+
+![实时行情播放演示：K 线逐根生成、成交量与报价同步刷新](docs/screenshots/demo.gif)
+
+> 🎬 另有 [5 秒 MP4 版本](docs/screenshots/demo.mp4)（1440×772，画质更高）。以下截图与动图均由本程序真实渲染，可用 `TDESK_CAPTURE` 环境变量复现，命令见[运行手册](docs/04-runbook.md)。
+
+| 明亮主题 | 策略回测（权益曲线 + 指标） |
+| :---: | :---: |
+| ![明亮主题](docs/screenshots/02-light.png) | ![策略回测](docs/screenshots/03-backtest.png) |
+
+| 美股 · 持仓页（T+0、绿涨红跌、$ 计价） | 成交回报 |
+| :---: | :---: |
+| ![美股市场](docs/screenshots/04-us-market.png) | ![成交回报](docs/screenshots/05-trades.png) |
 
 ## 架构
 

@@ -136,7 +136,7 @@ impl Broker for MyBroker {
 | 下单一直被拒 | 看右侧消息区中文原因；常见是超出涨跌停区间、非整手、可用资金不足、T+1 可卖为 0。 |
 | 市价单「已撤销」 | 首版市价单按 IOC 处理：未成交余量自动撤销，不是错误。 |
 | 回测收益看起来很好 | 行情是几何布朗运动合成数据，结论不可外推；请通过 `CsvSource` 换真实历史数据。 |
-| 想自动截一帧 UI | `EFRAME_SCREENSHOT_TO=/abs/path/frame.png cargo run -p tdesk-app --features screenshot`（eframe 内部钩子，第 2 帧后自动退出）。注意部分 macOS GL 驱动回读帧缓冲会得到无效图像，此时以 `cargo test -p tdesk-app` 的无头渲染测试为准。 |
+| 想自动截一帧 UI | 用 `TDESK_CAPTURE` / `TDESK_CAPTURE_TO`（见第 8 节），它在交换缓冲**之前**回读帧缓冲，稳定可用且无需屏幕录制权限。旧的 `EFRAME_SCREENSHOT_TO` + `--features screenshot` 钩子在 macOS 上会读到已交换的空缓冲，得到全黑图，已弃用。 |
 
 ## 7. 文件地图
 
@@ -145,6 +145,7 @@ Cargo.toml                          workspace 定义
 README.md                           项目入口（中文，含中/英切换横幅）
 README_EN.md                        英文入口（含中/英切换横幅）
 docs/01..04                         需求 / 架构 / 测试 / 运行
+docs/screenshots/                   真实界面截图 ×5 + demo.gif / demo.mp4
 crates/tdesk-core/src/
   types.rs        Price/Money/Order/Trade/Candle/Tick/Quote
   market.rs       MarketRules + A股/美股/港股 + FeeSchedule
@@ -172,3 +173,24 @@ crates/tdesk-app/src/
   theme.rs        明暗主题、市场涨跌配色、中文字体
 crates/tdesk-app/tests/ui_smoke.rs  无窗口渲染测试
 ```
+
+## 8. 生成文档截图与演示动图
+
+README 里的截图、GIF、MP4 全部由程序**真实渲染**，不是手绘示意图。启动入口支持两个环境变量（不设置时完全不影响正常启动）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `TDESK_CAPTURE` | 预设状态，格式 `<市场>,<主题>,<页签>,<tick 数>,<下单笔数>,<回测>` |
+| `TDESK_CAPTURE_TO` | 输出 PNG 绝对路径；设置后应用截完一帧自动退出 |
+
+预设字段取值：市场 `ashare/us/hk`，主题 `dark/light`，页签 `orders/trades/positions/account/backtest`；tick 数 0–4000（种子固定，结果可复现），下单笔数 0–4（穿越卖一的限价买单，会真实成交），回测 `1` 表示预跑 SMA(5,20)。
+
+```bash
+cargo build --release -p tdesk-app
+TDESK_CAPTURE="ashare,dark,orders,140,3,0" \
+TDESK_CAPTURE_TO=/abs/path/01-main.png ./target/release/tdesk-app
+```
+
+实现要点：`CaptureApp` 包装 `TradingApp`，等待窗口尺寸/字体稳定后发送 `ViewportCommand::Screenshot`，收到 `Event::Screenshot` 时把 `ColorImage` 写成 PNG 并退出。egui 在 `swap_buffers` **之前**回读，因此 macOS 上也能拿到有效画面；eframe 自带的 `__screenshot` 钩子在交换**之后**回读，会得到全黑图。
+
+演示动图的 12 帧用 `ticks = 140 + 24*i` 生成（`TICKS_PER_BAR = 24`，即每帧多一根 K 线），再用 Pillow 缩放/量化为 `demo.gif`，用 ffmpeg 编码为 `demo.mp4`。全程无需屏幕录制权限，也不依赖图形界面自动化。
